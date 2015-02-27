@@ -1,70 +1,69 @@
 package main
 
 import (
-  "fmt"
-  //"log"
+	"fmt"
 
-  "github.com/PuerkitoBio/goquery"
+	"github.com/PuerkitoBio/goquery"
 )
 
+const START_URL string = "http://news.ycombinator.com"
+const SELECTOR string = "a"
+
 type page_data struct {
-  url   string
-  count int
+	url   string
+	count int
 }
 
-func download_manager(hrefs chan []string, parser chan *goquery.Document){
-  select {
-  case links := <-hrefs:
-    for _, url := range links {
-      go downloader(url, parser)
-    }
-  }
+func download_manager(links []string, parser chan *goquery.Document) {
+	for _, url := range links {
+		go downloader(url, parser)
+	}
 }
 
 func downloader(url string, page chan *goquery.Document) {
-  doc, _ := goquery.NewDocument(url)
-  //if err != nil {
-    //log.Fatal(err)
-  //}
+	doc, _ := goquery.NewDocument(url)
 
-  page <- doc
+	page <- doc
 }
 
 //
 // Parse the specified __page__ for all links
 //  Send the number of links on that page to be analyzed to printer
 //  Send the links on the page to be downloaded
-func parse(page chan *goquery.Document, printer chan *page_data, hrefs chan []string){
-  links := make([]string, 0)
-  select {
-  case doc := <-page:
-    doc.Find("a").Each(func(i int, s *goquery.Selection) {
-      link, _ := s.Attr("href")
-      links = append(links, link)
-    })
+func parse(doc *goquery.Document, printer chan *page_data, hrefs chan []string) {
+	links := make([]string, 0)
+	doc.Find(SELECTOR).Each(func(i int, s *goquery.Selection) {
+		link, _ := s.Attr("href")
+		links = append(links, link)
+	})
 
-    hrefs <- links
+	hrefs <- links
 
-    result := &page_data{doc.Url.String(), len(links)}
-    printer <- result
-  }
+	result := &page_data{doc.Url.String(), len(links)}
+	printer <- result
 }
 
-func printer(data chan *page_data){
-  for {
-    page_info := <-data
-    fmt.Printf("%s -> %d\n", page_info.url, page_info.count);
-  }
+func printer(page_info *page_data) {
+	fmt.Printf("%s -> %d\n", page_info.url, page_info.count)
 }
 
 func main() {
-  page := make(chan *goquery.Document)
-  output := make(chan *page_data)
-  download_queue := make(chan []string)
+	downloaded_page := make(chan *goquery.Document)
+	result := make(chan *page_data)
+	download_queue := make(chan []string)
 
-  go parse(page, output, download_queue)
-  go download_manager(download_queue, page)
-  go downloader("http://lobste.rs", page)
+	go downloader(START_URL, downloaded_page)
 
-  printer(output)
+	for {
+		select {
+		case page := <-downloaded_page:
+			go parse(page, result, download_queue)
+
+		case urls := <-download_queue:
+			go download_manager(urls, downloaded_page)
+
+		case report := <-result:
+			printer(report)
+		}
+	}
 }
